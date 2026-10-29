@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,25 +29,6 @@ func (p *darwinProvider) GetRawPath(devicePath string) string {
 		return strings.Replace(clean, "/dev/disk", "/dev/rdisk", 1)
 	}
 	return devicePath
-}
-
-// diskutilPlist represents minimal plist structure for diskutil list -plist
-type diskutilListPlist struct {
-	AllDisksAndPartitions []diskutilDiskEntry `xml:"dict>array>dict"`
-}
-
-type diskutilDiskEntry struct {
-	DeviceIdentifier string                 `xml:"string"`
-	Size             int64                  `xml:"integer"`
-	Partitions       []diskutilPartitionEntry `xml:"array>dict"`
-	MountPoint       string                 `xml:"string"`
-}
-
-type diskutilPartitionEntry struct {
-	DeviceIdentifier string `xml:"string"`
-	Size             int64  `xml:"integer"`
-	MountPoint       string `xml:"string"`
-	VolumeName       string `xml:"string"`
 }
 
 func (p *darwinProvider) ListDevices(ctx context.Context) ([]domain.BlockDevice, error) {
@@ -87,15 +69,30 @@ func (p *darwinProvider) ListDevices(ctx context.Context) ([]domain.BlockDevice,
 
 func (p *darwinProvider) GetDevice(ctx context.Context, path string) (domain.BlockDevice, error) {
 	devices, err := p.ListDevices(ctx)
-	if err != nil {
-		return domain.BlockDevice{}, err
+	if err == nil {
+		cleanTarget := filepath.Clean(path)
+		for _, dev := range devices {
+			if filepath.Clean(dev.Path) == cleanTarget || filepath.Clean(dev.RawPath) == cleanTarget {
+				return dev, nil
+			}
+		}
 	}
 
-	cleanTarget := filepath.Clean(path)
-	for _, dev := range devices {
-		if filepath.Clean(dev.Path) == cleanTarget || filepath.Clean(dev.RawPath) == cleanTarget {
-			return dev, nil
+	// Direct lookup for raw disk images or newly attached devices
+	if stat, err := os.Stat(path); err == nil {
+		baseName := filepath.Base(path)
+		dev := domain.BlockDevice{
+			Path:            path,
+			RawPath:         p.GetRawPath(path),
+			Name:            baseName,
+			SizeBytes:       stat.Size(),
+			SectorSizeBytes: 512,
+			IsRemovable:     true,
 		}
+		if isSys, _, _ := safety.IsSystemDisk(dev); isSys {
+			dev.IsSystem = true
+		}
+		return dev, nil
 	}
 
 	return domain.BlockDevice{}, fmt.Errorf("%w: device %s not found", domain.ErrDeviceRemoved, path)
@@ -113,10 +110,14 @@ func (p *darwinProvider) inspectDisk(ctx context.Context, diskID string) (domain
 
 	devPath := "/dev/" + diskID
 	rawPath := "/dev/r" + diskID
-	size := info["TotalSize"].(int64)
-	sectorSize := info["DeviceBlockSize"].(int64)
-	if sectorSize == 0 {
-		sectorSize = 512
+
+	var size int64
+	if s, ok := info["TotalSize"].(int64); ok {
+		size = s
+	}
+	var sectorSize int64 = 512
+	if s, ok := info["DeviceBlockSize"].(int64); ok && s > 0 {
+		sectorSize = s
 	}
 
 	busProtocol, _ := info["BusProtocol"].(string)
