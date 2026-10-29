@@ -19,6 +19,9 @@
 [Rufus Architecture](#-the-ventox-native-engine-rufus-inspired) •
 [Features](#-features) •
 [Comparison](#-feature-comparison) •
+[Architecture ADR](docs/adr/0001-native-boot-engine.md) •
+[Compatibility Matrix](docs/compatibility.md) •
+[Security Policy](docs/security.md) •
 [Installation](#-installation) •
 [Contributing](#-contributing) •
 [License](#-license)
@@ -191,6 +194,38 @@ Scans and prints all connected removable USB drives and discoverable ISO disk im
 
 ---
 
+### 4. Advanced CLI Flags & Automation
+
+Ventox supports full non-interactive automation, scripted execution, and non-destructive dry-run simulations:
+
+```bash
+# Non-destructive simulation: validate plan and preflight guards without writing to disk
+ventox --dry-run --iso win11.iso --device /dev/sdb
+
+# Deploy Windows 11 with verification and automatic confirmation
+ventox --iso win11.iso --device /dev/sdb --verify --yes
+
+# Format USB flash drive as exFAT with custom label
+ventox format --device /dev/sdb --fs exfat --label "MY_USB" --yes
+
+# Query connected devices and discovered ISO images in machine-readable JSON
+ventox list --json
+```
+
+| Flag | Description |
+| :--- | :--- |
+| `--dry-run` | Executes preflight safety checks and plan simulation without touching target disk |
+| `--verify` | Performs post-write streaming SHA-256 readback checksum verification |
+| `--bypass-win11` | Injects `autounattend.xml` bypasses for TPM 2.0, Secure Boot, RAM, and Microsoft Online Account (NRO) |
+| `--device <path>` | Target storage device path (e.g., `/dev/sdb`, `/dev/disk2`, `\\.\PhysicalDrive1`) |
+| `--iso <path>` | Source disk image or ISO path |
+| `--fs <type>` | Target filesystem (`exfat`, `fat32`, `ntfs`, `ext4`, `apfs`) |
+| `--label <name>` | Custom filesystem volume label |
+| `-y`, `--yes` | Skip interactive confirmation prompts for headless automation |
+| `--json` | Output plan, device queries, and journals in structured JSON format |
+
+---
+
 ## 📦 Installation
 
 ### Option 1: Pre-compiled Binaries (Recommended)
@@ -234,49 +269,61 @@ sudo make install
 ventox/
 ├── .github/
 │   ├── workflows/
-│   │   ├── ci.yml                 # Automated CI tests for Go 1.22 & 1.23
-│   │   └── release.yml            # Multiplatform build & release (Linux & macOS)
+│   │   ├── ci.yml                 # Matrix CI testing on Linux, macOS, and Windows
+│   │   └── release.yml            # Automated cross-platform release pipeline
 │   ├── ISSUE_TEMPLATE/            # Standardized bug & feature request templates
 │   └── PULL_REQUEST_TEMPLATE.md   # PR review checklist
-├── bin/                           # Local build outputs
 ├── cmd/
 │   └── ventox/
-│       └── main.go                # Application entrypoint & CLI command router
+│       └── main.go                # Application CLI command router and workflow coordinator
+├── docs/
+│   ├── adr/
+│   │   └── 0001-native-boot-engine.md # Architectural Decision Record for native engine
+│   ├── compatibility.md          # Multi-OS platform compatibility matrix
+│   └── security.md               # Destructive-operation & safety validation policy
 ├── internal/
-│   ├── copier/
-│   │   └── progress.go            # Buffered file streamer with ETA & rate calculations
-│   ├── detector/
-│   │   ├── disk.go                # Shared USB disk definitions
-│   │   ├── disk_linux.go          # Linux lsblk JSON block device detector
-│   │   ├── disk_darwin.go         # macOS diskutil external USB detector
-│   │   ├── iso.go                 # Recursive file crawler for ISO disk images
-│   │   └── detector_test.go       # Detector unit tests
-│   ├── engine/
-│   │   ├── format.go              # Shared format profiles & modes
-│   │   ├── format_linux.go        # Linux filesystem formatter (mkfs.ntfs, vfat, exfat, ext4)
-│   │   ├── format_darwin.go       # macOS filesystem formatter (diskutil eraseDisk)
-│   │   ├── unmount_linux.go       # Linux lazy unmount (/proc/mounts)
-│   │   ├── unmount_darwin.go      # macOS force unmount (diskutil unmountDisk)
-│   │   └── native/
-│   │       ├── analyzer.go        # Read-only ISO inspector (Windows vs Linux)
-│   │       ├── bypass.go          # Windows 11 autounattend.xml bypass generator
-│   │       ├── windows.go         # Dual-partition UEFI/GPT Windows deployer
-│   │       ├── linux.go           # High-speed raw block streamer (DD Mode)
-│   │       ├── partition_linux.go # Linux parted & mkfs partition setup
-│   │       ├── partition_darwin.go# macOS diskutil partition setup
-│   │       ├── mount_linux.go     # Linux loopback ISO mount
-│   │       ├── mount_darwin.go    # macOS hdiutil ISO mount
-│   │       ├── raw_linux.go       # Linux block device path provider
-│   │       ├── raw_darwin.go      # macOS /dev/rdisk unbuffered path provider
-│   │       └── engine.go          # Native boot engine coordinator
-│   └── ui/
-│       ├── colors.go              # ANSI terminal styling and ASCII banners
-│       ├── help.go                # Help screens and version outputs
-│       └── menu.go                # Interactive terminal menus and confirmation gates
+│   ├── domain/                    # Clean domain models, typed errors, write plans, journals
+│   │   ├── device.go              # Storage device representations & formatting
+│   │   ├── errors.go              # Standard typed errors (ErrSystemDisk, ErrDeviceRemoved, etc.)
+│   │   ├── image.go               # Disk image metadata & classifications
+│   │   ├── operation.go           # Step journal records & verification reports
+│   │   └── write_plan.go          # Deterministic, immutable write plans
+│   ├── device/                    # Multi-OS storage enumeration (Linux, macOS, Windows)
+│   │   ├── provider.go            # DeviceProvider interface contract
+│   │   ├── provider_linux.go      # Linux block device detection (lsblk / sysfs)
+│   │   ├── provider_darwin.go     # macOS physical disk discovery (diskutil -plist)
+│   │   ├── provider_windows.go    # Windows storage discovery (PowerShell / WMI)
+│   │   └── fake/
+│   │       └── fake.go            # Sparse in-memory simulated block device for testing
+│   ├── iso/                       # Image discovery & inspection
+│   │   ├── checksum.go            # Context-cancellable streaming SHA-256 calculator
+│   │   ├── discover.go            # Standard user directory image scanner (sudo-aware)
+│   │   └── inspect.go             # Pure Go ISO9660 & UDF inspector & El Torito boot parser
+│   ├── safety/                    # Preflight validation & system disk protection
+│   │   ├── capacity.go            # Payload vs target size calculation
+│   │   ├── identity.go            # Anti-race condition device identity revalidation
+│   │   ├── preflight.go           # Composite write plan validator
+│   │   └── system_disk.go         # System disk guard (root, /boot, /home, swap, C:)
+│   ├── engine/                    # Native execution engine
+│   │   ├── planner.go             # Autonomous WritePlan generator
+│   │   ├── executor.go            # Step journal executor with cancellation & dry-run
+│   │   └── progress.go            # Live progress event dispatcher
+│   ├── writer/                    # Low-level media writers & formatters
+│   │   ├── format.go              # Multi-OS filesystem formatter (exFAT, FAT32, NTFS, ext4, APFS)
+│   │   ├── raw.go                 # 4 MiB aligned chunk streaming raw disk writer
+│   │   ├── unmount.go             # Cross-platform device & partition unmounting
+│   │   ├── verify.go              # Readback SHA-256 target verification engine
+│   │   └── windows_bypass.go      # Windows 11 autounattend.xml answer file generator
+│   └── ui/                        # User interface & terminal rendering
+│       ├── colors.go              # ANSI colors, step banners, and badges
+│       ├── help.go                # CLI documentation & version displays
+│       ├── menu.go                # Interactive prompt menus & selection
+│       └── progress.go            # Inline terminal progress bars & plan confirmation
+├── CHANGELOG.md                   # Chronological release log
 ├── CONTRIBUTING.md                # Guidelines for open-source contributors
 ├── CODE_OF_CONDUCT.md             # Contributor Covenant v2.1 code of conduct
 ├── LICENSE                        # MIT Open Source License
-├── Makefile                       # Multiplatform build targets (Linux & macOS)
+├── Makefile                       # Multiplatform build targets (Linux, macOS, Windows)
 └── README.md                      # Comprehensive project documentation
 ```
 

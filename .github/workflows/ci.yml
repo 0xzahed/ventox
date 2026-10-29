@@ -7,11 +7,13 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
-    name: Build & Test
-    runs-on: ubuntu-latest
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
         go-version: [ '1.22', '1.23' ]
 
     steps:
@@ -27,13 +29,11 @@ jobs:
       - name: Verify Dependencies
         run: go mod verify
 
-      - name: Lint and Code Checks
+      - name: Vet
         run: go vet ./...
 
-      - name: Run Unit Tests
-        run: go test -v -race -coverprofile=coverage.txt ./...
+      - name: Run Test Suite
+        run: go test -v -race ./...
 
       - name: Build Binary
-        run: |
-          mkdir -p bin
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ventox cmd/ventox/main.go
+        run: go build -o bin/ventox ./cmd/ventox

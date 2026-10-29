@@ -19,8 +19,14 @@ build-darwin:
 	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 cmd/ventox/main.go
 	@echo "✔ macOS builds complete in $(BUILD_DIR)/"
 
-build-all: build build-darwin
-	@echo "🐧🍏 All platform builds complete!"
+build-windows:
+	@echo "🪟 Building for Windows (amd64)..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe cmd/ventox/main.go
+	@echo "✔ Windows build complete in $(BUILD_DIR)/"
+
+build-all: build build-darwin build-windows
+	@echo "🐧🍏🪟 All platform builds complete!"
 
 run: build
 	@./$(BUILD_DIR)/$(BINARY_NAME)
