@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xzahed/ventox/internal/detector"
 	"github.com/0xzahed/ventox/internal/ui"
 )
 
@@ -19,11 +20,12 @@ const defaultVentoyURL = "https://github.com/ventoy/Ventoy/releases/download/v1.
 
 // LocateVentoy locates or automatically downloads the Ventoy toolset.
 func LocateVentoy() (string, error) {
-	home, _ := os.UserHomeDir()
+	home := detector.GetRealUserHome()
 	candidates := []string{
 		filepath.Join(home, "Downloads", "ventoy-1.1.18", "Ventoy2Disk.sh"),
 		"/opt/ventoy/Ventoy2Disk.sh",
 		filepath.Join(home, ".cache", "ventox", "ventoy-1.1.18", "Ventoy2Disk.sh"),
+		"/root/.cache/ventox/ventoy-1.1.18/Ventoy2Disk.sh",
 	}
 
 	// Also check relative to executable
