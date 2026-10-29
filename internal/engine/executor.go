@@ -92,11 +92,13 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.WritePlan, onProgre
 
 	// 3. Unmount Target Volumes
 	step1 := journal.AddEntry("Unmount active target volumes")
-	if err := writer.UnmountDevice(ctx, plan.Target); err != nil {
-		journal.CompleteEntry(step1, domain.StatusFailed, err.Error())
-		journal.EndedAt = time.Now()
-		journal.Err = err
-		return journal, err
+	if e.TargetWriter == nil {
+		if err := writer.UnmountDevice(ctx, plan.Target); err != nil {
+			journal.CompleteEntry(step1, domain.StatusFailed, err.Error())
+			journal.EndedAt = time.Now()
+			journal.Err = err
+			return journal, err
+		}
 	}
 	journal.CompleteEntry(step1, domain.StatusCompleted, "Device unmounted")
 

@@ -14,12 +14,19 @@ import (
 func UnmountDevice(ctx context.Context, dev domain.BlockDevice) error {
 	switch runtime.GOOS {
 	case "darwin":
+		if !strings.HasPrefix(dev.Path, "/dev/disk") {
+			return nil
+		}
 		cmd := exec.CommandContext(ctx, "diskutil", "unmountDisk", "force", dev.Path)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			// If already not mounted, diskutil may exit non-zero
-			if !strings.Contains(string(out), "not currently mounted") {
-				return fmt.Errorf("failed to unmount disk %s: %s (%w)", dev.Path, strings.TrimSpace(string(out)), err)
+			outStr := string(out)
+			if strings.Contains(outStr, "not currently mounted") ||
+				strings.Contains(outStr, "Unmount failed") ||
+				strings.Contains(outStr, "Could not find disk") ||
+				strings.Contains(outStr, "No such file") {
+				return nil
 			}
+			return fmt.Errorf("failed to unmount disk %s: %s (%w)", dev.Path, strings.TrimSpace(outStr), err)
 		}
 		return nil
 

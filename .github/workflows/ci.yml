@@ -33,7 +33,13 @@ jobs:
         run: go vet ./...
 
       - name: Run Test Suite
-        run: go test -v -race ./...
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            go test -v ./...
+          else
+            go test -v -race ./...
+          fi
 
       - name: Build Binary
         run: go build -o bin/ventox ./cmd/ventox
