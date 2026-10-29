@@ -209,3 +209,57 @@ func ConfirmErase(diskPath, isoPath string) bool {
 	}
 	return strings.ToUpper(resp) == "YES"
 }
+
+type FormatChoice struct {
+	ID          int
+	Title       string
+	Description string
+}
+
+// SelectFormatMode prompts user to choose format mode
+func SelectFormatMode(choices []FormatChoice) (FormatChoice, error) {
+	fmt.Println(Bold("Select Format Target & Partition Style:"))
+	for _, c := range choices {
+		fmt.Printf("  %s %s\n     %s\n",
+			Cyan(fmt.Sprintf("[%d]", c.ID)),
+			Bold(c.Title),
+			Gray(c.Description),
+		)
+	}
+	fmt.Println()
+
+	for {
+		choice, err := Prompt("Select mode [1-6]", "1")
+		if err != nil {
+			return FormatChoice{}, err
+		}
+		idx, err := strconv.Atoi(choice)
+		if err == nil {
+			for _, c := range choices {
+				if c.ID == idx {
+					return c, nil
+				}
+			}
+		}
+		PrintError("Invalid choice. Please select a number from 1 to 6.")
+	}
+}
+
+// ConfirmFormat asks for explicit confirmation before formatting a disk
+func ConfirmFormat(diskPath, formatTitle, label string) bool {
+	fmt.Println()
+	fmt.Println(Red(Bold("===============================================================")))
+	fmt.Println(Red(Bold(" ⚠️  CRITICAL WARNING: ALL DATA ON THE USB WILL BE ERASED!   ⚠️ ")))
+	fmt.Println(Red(Bold("===============================================================")))
+	fmt.Printf(" Target Device: %s\n", Bold(diskPath))
+	fmt.Printf(" Format Mode:   %s\n", Bold(formatTitle))
+	fmt.Printf(" Volume Label:  %s\n", Bold(label))
+	fmt.Println(Red(Bold("===============================================================")))
+	fmt.Println()
+
+	resp, err := Prompt(fmt.Sprintf("Type %s to format and wipe drive", Bold("YES")), "NO")
+	if err != nil {
+		return false
+	}
+	return strings.ToUpper(resp) == "YES"
+}

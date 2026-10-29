@@ -132,19 +132,57 @@ sudo make install
 
 ---
 
-## 🎮 Quick Start
+## 🎮 Quick Start & Commands
 
-Simply run `ventox` from your terminal:
+### CLI Command Overview
+
+| Command | Description | Needs Root? |
+| :--- | :--- | :--- |
+| `ventox` | Interactive bootable USB creator wizard | Yes (Auto-elevates) |
+| `ventox format` | Interactive USB formatter & partition resetter | Yes (Auto-elevates) |
+| `ventox list` | List connected USB storage drives and scanned ISO files | No |
+| `ventox version` | Display version, build, runtime, and license information | No |
+| `ventox help` | Display comprehensive help screen and usage examples | No |
+
+---
+
+### 1. Creating a Bootable USB (Default Wizard)
 
 ```bash
 ventox
 ```
-
 1. Insert your USB drive.
 2. Select your USB drive (or press **Enter** to accept the auto-detected one).
 3. Select your `.iso` image (or press **Enter** to accept the auto-detected one).
 4. Review the drive path and confirm by typing **`YES`**.
 5. Wait for the copy and cache flush to complete!
+
+---
+
+### 2. Formatting or Restoring a USB Drive
+
+When you want to wipe or reformat a USB drive, change its partition style, or restore it back to standard universal storage:
+
+```bash
+ventox format
+```
+
+Ventox provides 6 distinct format profiles:
+* **[1] Ventoy Bootable (GPT / UEFI):** Modern UEFI systems & Windows 11.
+* **[2] Ventoy Bootable (MBR / Legacy BIOS):** For older motherboards and BIOS compatibility.
+* **[3] Clean Standard USB (exFAT):** Universal cross-platform storage (Windows/Mac/Linux) with files > 4GB.
+* **[4] Clean Standard USB (FAT32):** Maximum compatibility with embedded systems, stereos, and older consoles.
+* **[5] Clean Standard USB (NTFS):** Native Windows filesystem with permissions & journaling.
+* **[6] Clean Standard USB (ext4):** High-performance Linux native filesystem.
+
+---
+
+### 3. Inspecting Drives and ISOs
+
+```bash
+ventox list
+```
+Scans and prints all connected removable USB drives and discoverable ISO disk images without touching or modifying any disks.
 
 ---
 

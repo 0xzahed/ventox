@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,11 +17,42 @@ import (
 )
 
 func main() {
-	// Auto re-execute with sudo if not root
+	args := os.Args[1:]
+
+	if len(args) > 0 {
+		cmd := strings.ToLower(args[0])
+		switch cmd {
+		case "version", "-v", "--version":
+			ui.PrintVersion()
+			return
+		case "help", "-h", "--help":
+			ui.PrintHelp()
+			return
+		case "list", "ls":
+			runList()
+			return
+		case "format", "wipe":
+			runFormat()
+			return
+		default:
+			// If an unknown flag or option is passed
+			if strings.HasPrefix(cmd, "-") {
+				ui.PrintError(fmt.Sprintf("Unknown flag: %s", cmd))
+				ui.PrintHelp()
+				os.Exit(1)
+			}
+		}
+	}
+
+	// Default: Run interactive boot creation wizard
+	runWizard()
+}
+
+func ensureRoot() {
 	if os.Geteuid() != 0 {
 		ui.Banner()
-		ui.PrintInfo("Root permissions required to partition USB and write bootloader.")
-		ui.PrintInfo("Requesting administrative privileges (sudo)...")
+		ui.PrintInfo("Administrative privileges (sudo) required for direct disk operations.")
+		ui.PrintInfo("Re-executing with sudo...")
 		fmt.Println()
 
 		exe, err := os.Executable()
@@ -37,7 +69,107 @@ func main() {
 		}
 		os.Exit(0)
 	}
+}
 
+func runList() {
+	ui.Banner()
+	fmt.Println(ui.Cyan(ui.Bold("--- CONNECTED USB STORAGE DEVICES ---")))
+	disks, err := detector.DetectUSBDisks()
+	if err != nil {
+		ui.PrintError(fmt.Sprintf("Failed to query USB disks: %v", err))
+	} else if len(disks) == 0 {
+		ui.PrintWarning("No USB storage drives currently connected.")
+	} else {
+		for i, d := range disks {
+			fmt.Printf("  %s %s\n", ui.Cyan(fmt.Sprintf("[%d]", i+1)), d.DisplayString())
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(ui.Cyan(ui.Bold("--- DETECTED ISO DISK IMAGES ---")))
+	isos, err := detector.FindISOFallbacks()
+	if err != nil {
+		ui.PrintWarning(fmt.Sprintf("Error scanning ISOs: %v", err))
+	} else if len(isos) == 0 {
+		ui.PrintWarning("No .iso files found in user Downloads or Desktop.")
+	} else {
+		for i, iso := range isos {
+			fmt.Printf("  %s %s %s\n     %s\n",
+				ui.Cyan(fmt.Sprintf("[%d]", i+1)),
+				ui.Bold(iso.Name),
+				ui.Cyan(fmt.Sprintf("(%s)", iso.FormattedSize)),
+				ui.Gray(iso.Path),
+			)
+		}
+	}
+	fmt.Println()
+}
+
+func runFormat() {
+	ensureRoot()
+	ui.Banner()
+
+	// 1. Detect and Select USB Drive
+	ui.PrintStep(1, 3, "Select USB Drive to Format")
+	disks, err := detector.DetectUSBDisks()
+	if err != nil {
+		ui.PrintWarning(fmt.Sprintf("Failed to query lsblk: %v", err))
+	}
+
+	selectedDisk, err := ui.SelectUSB(disks)
+	if err != nil {
+		ui.PrintError(fmt.Sprintf("Error selecting USB: %v", err))
+		os.Exit(1)
+	}
+
+	// 2. Select Format Option
+	ui.PrintStep(2, 3, "Select Target Filesystem & Partition Style")
+	engineOpts := engine.GetFormatOptions()
+	var uiChoices []ui.FormatChoice
+	for _, o := range engineOpts {
+		uiChoices = append(uiChoices, ui.FormatChoice{
+			ID:          int(o.Mode),
+			Title:       o.Title,
+			Description: o.Description,
+		})
+	}
+
+	selectedChoice, err := ui.SelectFormatMode(uiChoices)
+	if err != nil {
+		ui.PrintError(fmt.Sprintf("Error choosing format mode: %v", err))
+		os.Exit(1)
+	}
+
+	label, _ := ui.Prompt("Enter Volume Label (e.g. VENTOX, MY_USB)", "VENTOX")
+
+	// 3. Confirm
+	ui.PrintStep(3, 3, "Confirm Drive Format")
+	if !ui.ConfirmFormat(selectedDisk.Path, selectedChoice.Title, label) {
+		ui.PrintWarning("Format cancelled by user. No changes were made.")
+		os.Exit(0)
+	}
+
+	fmt.Println()
+	ui.PrintInfo(fmt.Sprintf("Formatting %s as %s...", selectedDisk.Path, selectedChoice.Title))
+
+	if err := engine.FormatDisk(selectedDisk.Path, engine.FormatMode(selectedChoice.ID), label); err != nil {
+		ui.PrintError(fmt.Sprintf("Format failed: %v", err))
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
+	fmt.Println(ui.Green(ui.Bold("  ✔ FORMAT COMPLETE! USB DRIVE IS READY TO USE!               ")))
+	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
+	fmt.Printf(" • Target USB:   %s\n", ui.Bold(selectedDisk.Path))
+	fmt.Printf(" • Format Mode:  %s\n", ui.Bold(selectedChoice.Title))
+	fmt.Printf(" • Volume Label: %s\n", ui.Bold(label))
+	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
+	fmt.Println()
+}
+
+func runWizard() {
+	ensureRoot()
 	ui.Banner()
 
 	// 1. Detect and Select USB Drive
@@ -149,7 +281,7 @@ func main() {
 	fmt.Printf(" • Target USB:   %s\n", ui.Bold(selectedDisk.Path))
 	fmt.Printf(" • Boot Engine:  Ventoy (GPT / UEFI & Legacy BIOS)\n")
 	fmt.Printf(" • Loaded ISO:   %s\n", ui.Bold(filepath.Base(selectedISO)))
-	fmt.Println(" • You can boot any PC using this USB (Press F12, F11, or Esc at startup)")
+	fmt.Println(" • Ready to boot on any modern PC (Press F12, F11, or Esc at boot)")
 	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
 	fmt.Println()
 }
