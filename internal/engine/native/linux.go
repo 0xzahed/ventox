@@ -14,6 +14,7 @@ import (
 
 // WriteLinuxUSB writes a Linux hybrid ISO directly to the raw block device (DD mode)
 // with live speed, byte-accurate progress bar, and cache synchronization.
+// Fully cross-platform across Linux and macOS (/dev/rdiskX).
 func WriteLinuxUSB(diskPath, isoPath string) error {
 	ui.PrintInfo("Unmounting target USB device partitions...")
 	if err := engine.UnmountDevice(diskPath); err != nil {
@@ -31,10 +32,10 @@ func WriteLinuxUSB(diskPath, isoPath string) error {
 		return fmt.Errorf("failed to stat ISO image: %w", err)
 	}
 
-	// Open raw block device for writing
-	destDev, err := os.OpenFile(diskPath, os.O_WRONLY, 0660)
+	rawPath := GetRawDevicePath(diskPath)
+	destDev, err := os.OpenFile(rawPath, os.O_WRONLY, 0660)
 	if err != nil {
-		return fmt.Errorf("failed to open raw block device %s: %w", diskPath, err)
+		return fmt.Errorf("failed to open raw block device %s: %w", rawPath, err)
 	}
 	defer destDev.Close()
 
@@ -44,7 +45,7 @@ func WriteLinuxUSB(diskPath, isoPath string) error {
 		LastUpdate: time.Now(),
 	}
 
-	ui.PrintInfo(fmt.Sprintf("Flashing raw hybrid Linux image to %s...", diskPath))
+	ui.PrintInfo(fmt.Sprintf("Flashing raw hybrid Linux image to %s...", rawPath))
 
 	// 4MB streaming buffer
 	buf := make([]byte, 4*1024*1024)
@@ -57,9 +58,9 @@ func WriteLinuxUSB(diskPath, isoPath string) error {
 	_ = destDev.Sync()
 	_ = exec.Command("sync").Run()
 
-	ui.PrintInfo("Informing kernel of new partition table (partprobe)...")
+	ui.PrintInfo("Finalizing disk partition tables...")
 	time.Sleep(1 * time.Second)
-	_ = exec.Command("partprobe", diskPath).Run()
+	PostRawWriteCleanup(diskPath)
 
 	return nil
 }

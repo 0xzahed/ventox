@@ -3,7 +3,6 @@ package native
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -32,16 +31,13 @@ func AnalyzeISO(isoPath string) (*ISOAnalysis, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp mount: %w", err)
 	}
-	defer func() {
-		_ = exec.Command("umount", "-l", tempMount).Run()
-		_ = os.Remove(tempMount)
-	}()
+	defer os.Remove(tempMount)
 
-	// Mount ISO read-only using loop device
-	cmd := exec.Command("mount", "-o", "loop,ro", isoPath, tempMount)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to loop-mount ISO: %s (%w)", string(out), err)
+	cleanup, err := MountLoopISO(isoPath, tempMount)
+	if err != nil {
+		return nil, err
 	}
+	defer cleanup()
 
 	analysis := &ISOAnalysis{
 		Type: OSUnknown,

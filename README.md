@@ -3,6 +3,7 @@
 # ⚡ Ventox
 
 ### Next-Generation UEFI/GPT Bootable USB Creator in Go
+#### Supporting Linux & macOS (Apple Silicon M1/M2/M3/M4 & Intel)
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/0xzahed/ventox)](https://goreportcard.com/report/github.com/0xzahed/ventox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -11,7 +12,7 @@
 [![Release](https://img.shields.io/github/v/release/0xzahed/ventox?include_prereleases)](https://github.com/0xzahed/ventox/releases)
 
 <p align="center">
-  <b>Ventox</b> is a fast, interactive, zero-configuration CLI tool written in Go that automatically detects your USB flash drives and ISO disk images, then crafts 100% compliant UEFI/GPT bootable media for both <b>Windows 11</b> and <b>Linux</b> without the FAT32 file size limit.
+  <b>Ventox</b> is a fast, interactive, zero-configuration CLI tool written in Go that brings the power of <b>Rufus</b> to <b>Linux & macOS</b>. It automatically detects USB flash drives and ISO images, crafting 100% compliant UEFI/GPT bootable media for both <b>Windows 11</b> and <b>Linux</b> without the 4 GB FAT32 file size limit.
 </p>
 
 [Quick Start](#-quick-start) •
@@ -123,12 +124,20 @@ Copying: [████████████████████░░░�
 go install github.com/0xzahed/ventox/cmd/ventox@latest
 ```
 
-### Option 2: Pre-compiled Binaries
+### Option 2: Pre-compiled Binaries (Linux & macOS)
 
-Download the latest release tarball for your architecture from the [Releases](https://github.com/0xzahed/ventox/releases) page:
+Download the release archive matching your operating system and CPU architecture from the [Releases](https://github.com/0xzahed/ventox/releases) page:
 
 ```bash
-# Example for Linux x86_64
+# macOS Apple Silicon (M1/M2/M3/M4)
+curl -sSL https://github.com/0xzahed/ventox/releases/latest/download/ventox-darwin-arm64.tar.gz | tar -xz
+sudo mv ventox-darwin-arm64 /usr/local/bin/ventox
+
+# macOS Intel
+curl -sSL https://github.com/0xzahed/ventox/releases/latest/download/ventox-darwin-amd64.tar.gz | tar -xz
+sudo mv ventox-darwin-amd64 /usr/local/bin/ventox
+
+# Linux x86_64
 curl -sSL https://github.com/0xzahed/ventox/releases/latest/download/ventox-linux-amd64.tar.gz | tar -xz
 sudo mv ventox-linux-amd64 /usr/local/bin/ventox
 ```

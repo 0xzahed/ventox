@@ -1,4 +1,4 @@
-.PHONY: all build run test lint clean install
+.PHONY: all build build-darwin build-all run test lint clean install
 
 BINARY_NAME=ventox
 BUILD_DIR=bin
@@ -7,10 +7,20 @@ MODULE=github.com/0xzahed/ventox
 all: build
 
 build:
-	@echo "🔨 Building $(BINARY_NAME)..."
+	@echo "🔨 Building $(BINARY_NAME) for current OS..."
 	@mkdir -p $(BUILD_DIR)
 	go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME) cmd/ventox/main.go
 	@echo "✔ Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
+
+build-darwin:
+	@echo "🍏 Building for macOS (Darwin arm64 & amd64)..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 cmd/ventox/main.go
+	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 cmd/ventox/main.go
+	@echo "✔ macOS builds complete in $(BUILD_DIR)/"
+
+build-all: build build-darwin
+	@echo "🐧🍏 All platform builds complete!"
 
 run: build
 	@./$(BUILD_DIR)/$(BINARY_NAME)

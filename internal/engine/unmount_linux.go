@@ -1,3 +1,5 @@
+//go:build linux
+
 package engine
 
 import (
@@ -9,8 +11,7 @@ import (
 	"time"
 )
 
-// UnmountDevice unmounts all partitions and active mounts associated with the device.
-// It uses lazy unmount (umount -l) to ensure any busy file manager lock is detached.
+// UnmountDevice unmounts all partitions and active mounts associated with the device on Linux.
 func UnmountDevice(devicePath string) error {
 	file, err := os.Open("/proc/mounts")
 	if err != nil {
