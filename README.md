@@ -32,13 +32,25 @@ Creating a bootable Windows 11 or modern Linux USB drive on Linux is notoriously
 2. **FAT32 4 GB Limit:** Standard UEFI boot partitions require FAT32, but Windows 11 `install.wim` is typically **5 GB to 7 GB+** (and modern ISOs exceed 8.5 GB), causing copying to fail unless manually split with specialized tools.
 3. **Heavy GUI Tools:** Electron-based flashers consume hundreds of megabytes of RAM and often lack native Windows UEFI partition bootstrapping on Linux.
 
-## ⚡ The Ventox Solution
+## ⚡ The Ventox Native Engine Architecture (Rufus-Inspired)
 
-**Ventox** solves this elegantly through a lightweight, standalone Go binary:
-- **Auto-Detects Everything:** Discovers inserted USB drives and scans common directories (`Downloads`, `Desktop`, `Documents`) for `.iso` files.
-- **Dual Partition GPT Scheme:** Sets up a robust exFAT data partition (no 4 GB file size limit) combined with a UEFI boot partition powered by the Ventoy runtime.
-- **Native Go Streamer:** Direct buffered file streaming with live transfer rates (MB/s), visual ASCII progress bar, ETA calculation, and filesystem cache sync.
-- **Auto-Elevation:** Seamlessly re-executes with `sudo` if run as an unprivileged user.
+Ventox features an independent, native boot engine inspired by Pete Batard's architectural work on **Rufus**:
+
+### 1. Dual-Partition UEFI Standard for Windows
+* **Partition 1 (`BOOT`, FAT32, ~1024 MiB):** Holds standard UEFI boot components (`/efi/boot/bootx64.efi`, `/boot`, `/bootmgr`, `/bootmgr.efi`), the WinPE kernel (`sources/boot.wim`), and the automated hardware bypass answer file (`autounattend.xml`). Guaranteed 100% UEFI boot compatibility on every motherboard firmware without requiring custom third-party drivers.
+* **Partition 2 (`INSTALL`, NTFS, Remaining Disk):** Holds the full Windows installation media including oversized `sources/install.wim` files (> 8 GB). WinPE natively mounts NTFS, locates `sources\install.wim`, and runs setup without FAT32 restrictions or manual WIM file splitting.
+
+### 2. Windows 11 Automated Hardware Bypass
+Ventox automatically generates and injects an `autounattend.xml` answer file into both partitions to bypass Microsoft hardware restrictions during `windowsPE` execution:
+* `BypassTPMCheck = 1` (Bypasses TPM 2.0 requirement)
+* `BypassSecureBootCheck = 1` (Bypasses Secure Boot requirement)
+* `BypassRAMCheck = 1` (Bypasses 4GB minimum RAM requirement)
+* `BypassCPUCheck = 1` (Bypasses unsupported CPU model checks)
+* `BypassStorageCheck = 1` (Bypasses 64GB minimum disk requirement)
+* `BypassNRO = 1` (Disables mandatory Microsoft Online Account login during OOBE, allowing offline local accounts)
+
+### 3. Direct Streaming Block Copy for Linux
+For Linux hybrid ISO images (Ubuntu, Debian, Fedora, Arch, Kali), Ventox operates in **Raw Block Streaming (DD Mode)** with a high-throughput 4MB buffer, real-time progress calculations (MB/s and ETA), and kernel cache synchronization.
 
 ---
 

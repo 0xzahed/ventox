@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/0xzahed/ventox/internal/copier"
 	"github.com/0xzahed/ventox/internal/detector"
 	"github.com/0xzahed/ventox/internal/engine"
+	"github.com/0xzahed/ventox/internal/engine/native"
 	"github.com/0xzahed/ventox/internal/ui"
 )
 
@@ -221,57 +220,12 @@ func runWizard() {
 		os.Exit(1)
 	}()
 
-	// 4. Locate & Install Ventoy
-	ui.PrintStep(3, 4, "Installing UEFI/GPT Bootloader (Ventoy)")
-	ventoyScript, err := engine.LocateVentoy()
-	if err != nil {
-		ui.PrintError(fmt.Sprintf("Failed to locate Ventoy: %v", err))
+	// 4. Deploy Native Engine (Rufus-style Dual Partition UEFI + Win11 Bypass / Linux DD)
+	ui.PrintStep(3, 3, "Deploying Bootable Media (Native Rufus-Style Engine)")
+	if err := native.DeployNativeBoot(selectedDisk.Path, selectedISO); err != nil {
+		ui.PrintError(fmt.Sprintf("Native deployment failed: %v", err))
 		os.Exit(1)
 	}
-
-	ui.PrintInfo(fmt.Sprintf("Using Ventoy engine: %s", ventoyScript))
-	if err := engine.InstallVentoy(ventoyScript, selectedDisk.Path); err != nil {
-		ui.PrintError(fmt.Sprintf("Bootloader setup failed: %v", err))
-		os.Exit(1)
-	}
-	ui.PrintSuccess("Ventoy bootloader installed successfully.")
-
-	// 5. Mount Partition and Copy ISO
-	ui.PrintStep(4, 4, "Copying ISO Image to Bootable USB")
-	partPath := engine.GetVentoyDataPartition(selectedDisk.Path)
-
-	mountDir, err := os.MkdirTemp("", "bootmaker_mnt_*")
-	if err != nil {
-		ui.PrintError(fmt.Sprintf("Failed to create temporary mount directory: %v", err))
-		os.Exit(1)
-	}
-	activeMount = mountDir
-	defer func() {
-		if activeMount != "" {
-			_ = exec.Command("umount", "-l", activeMount).Run()
-			_ = os.Remove(activeMount)
-		}
-	}()
-
-	ui.PrintInfo(fmt.Sprintf("Mounting %s to %s...", partPath, mountDir))
-	time.Sleep(1 * time.Second)
-	if err := exec.Command("mount", partPath, mountDir).Run(); err != nil {
-		ui.PrintError(fmt.Sprintf("Failed to mount partition: %v", err))
-		os.Exit(1)
-	}
-
-	destPath := filepath.Join(mountDir, filepath.Base(selectedISO))
-	ui.PrintInfo(fmt.Sprintf("Writing: %s", filepath.Base(selectedISO)))
-
-	if err := copier.CopyWithProgress(selectedISO, destPath); err != nil {
-		ui.PrintError(fmt.Sprintf("Copy failed: %v", err))
-		os.Exit(1)
-	}
-
-	ui.PrintInfo("Unmounting USB drive cleanly...")
-	_ = exec.Command("umount", mountDir).Run()
-	_ = os.Remove(mountDir)
-	activeMount = ""
 
 	// Complete Banner
 	fmt.Println()
@@ -279,7 +233,7 @@ func runWizard() {
 	fmt.Println(ui.Green(ui.Bold("  🎉 CONGRATULATIONS! BOOTABLE USB IS READY! 🎉               ")))
 	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
 	fmt.Printf(" • Target USB:   %s\n", ui.Bold(selectedDisk.Path))
-	fmt.Printf(" • Boot Engine:  Ventoy (GPT / UEFI & Legacy BIOS)\n")
+	fmt.Printf(" • Boot Engine:  Ventox Native (Rufus-Style Dual Partition UEFI / DD)\n")
 	fmt.Printf(" • Loaded ISO:   %s\n", ui.Bold(filepath.Base(selectedISO)))
 	fmt.Println(" • Ready to boot on any modern PC (Press F12, F11, or Esc at boot)")
 	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
