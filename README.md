@@ -5,6 +5,7 @@
 ### Next-Generation UEFI/GPT Bootable USB Creator & Drive Formatter in Go
 #### The Rufus Alternative for Linux & macOS (Apple Silicon M1/M2/M3/M4 & Intel)
 
+[![CI](https://github.com/0xzahed/ventox/actions/workflows/ci.yml/badge.svg)](https://github.com/0xzahed/ventox/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/0xzahed/ventox)](https://goreportcard.com/report/github.com/0xzahed/ventox)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/0xzahed/ventox)](https://golang.org)
