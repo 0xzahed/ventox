@@ -73,8 +73,8 @@ func TestInspectSyntheticISO(t *testing.T) {
 	copy(pvd[40:72], "VENTOX_WIN11_TEST              ")
 
 	// Root dir record at pvd[156:190] (34 bytes)
-	pvd[156] = 34                                  // record len
-	binary.LittleEndian.PutUint32(pvd[158:162], 20) // extent LBA = sector 20
+	pvd[156] = 34                                     // record len
+	binary.LittleEndian.PutUint32(pvd[158:162], 20)   // extent LBA = sector 20
 	binary.LittleEndian.PutUint32(pvd[166:170], 2048) // data len = 2048
 
 	// Sector 17: Boot Record (El Torito)
@@ -109,11 +109,11 @@ func TestInspectSyntheticISO(t *testing.T) {
 	root[33] = 0
 	// Entry 2: "SOURCES" (offset 34)
 	sEntry := root[34:]
-	sEntry[0] = 42 // record len: 33 + 7 ("SOURCES") + 2 padding = 42
-	binary.LittleEndian.PutUint32(sEntry[2:6], 21) // LBA = sector 21
+	sEntry[0] = 42                                     // record len: 33 + 7 ("SOURCES") + 2 padding = 42
+	binary.LittleEndian.PutUint32(sEntry[2:6], 21)     // LBA = sector 21
 	binary.LittleEndian.PutUint32(sEntry[10:14], 2048) // len = 2048
-	sEntry[25] = 0x02 // dir
-	sEntry[32] = 7    // name len
+	sEntry[25] = 0x02                                  // dir
+	sEntry[32] = 7                                     // name len
 	copy(sEntry[33:40], "SOURCES")
 
 	// Sector 21: SOURCES Directory (contains "INSTALL.WIM" and "BOOT.WIM")
@@ -177,7 +177,7 @@ func TestInspectRawImage(t *testing.T) {
 	data[511] = 0xAA
 
 	// Partition 1 at 446
-	data[446] = 0x80 // Bootable
+	data[446] = 0x80   // Bootable
 	data[446+4] = 0x83 // Linux partition
 
 	// Partition 2 at 446 + 16 = 462
@@ -260,5 +260,3 @@ func TestRealWindows11ISOIfExists(t *testing.T) {
 		t.Errorf("expected IsEFI to be true")
 	}
 }
-
-

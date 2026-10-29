@@ -81,29 +81,54 @@ Feature requests are always welcome! If you have an idea:
 
 ## Project Architecture
 
-Ventox follows standard Go package layout principles:
+Ventox follows standard Go package layout principles with strict separation of concerns:
 
 ```
 ventox/
-├── bin/                       # Local build outputs
 ├── cmd/
 │   └── ventox/
-│       └── main.go            # CLI entrypoint, argument parsing, flow orchestrator
+│       └── main.go            # CLI entrypoint, flag parsing, flow orchestrator
 ├── internal/
-│   ├── copier/
-│   │   └── progress.go        # Buffered file copy with real-time ETA & speed
-│   ├── detector/
-│   │   ├── disk.go            # Block device querying via lsblk JSON
-│   │   └── iso.go             # File tree crawler for ISO disk images
-│   ├── engine/
-│   │   ├── unmount.go         # Safe namespace/lazy unmounting
-│   │   └── ventoy.go          # Ventoy runtime bootstrap and disk formatting
-│   └── ui/
-│       ├── colors.go          # ANSI terminal styling
-│       └── menu.go            # Interactive prompts and confirmation gates
-├── Makefile
-├── LICENSE
-└── README.md
+│   ├── domain/                # Clean domain models, typed errors, write plans, journals
+│   │   ├── device.go          # Storage device representations & formatting
+│   │   ├── errors.go          # Standard typed errors (ErrSystemDisk, ErrDeviceRemoved, etc.)
+│   │   ├── image.go           # Disk image metadata & classifications
+│   │   ├── operation.go       # Step journal records & verification reports
+│   │   └── write_plan.go      # Deterministic, immutable write plans
+│   ├── device/                # Cross-platform device discovery (Linux, macOS, Windows)
+│   │   ├── provider.go        # DeviceProvider interface contract
+│   │   ├── provider_linux.go  # Linux block device detection (lsblk / sysfs)
+│   │   ├── provider_darwin.go # macOS physical disk discovery (diskutil -plist)
+│   │   ├── provider_windows.go# Windows storage discovery (PowerShell / WMI)
+│   │   └── fake/              # In-memory sparse block simulated disk for tests
+│   ├── iso/                   # Image discovery & inspection
+│   │   ├── checksum.go        # Context-cancellable streaming SHA-256 calculator
+│   │   ├── discover.go        # Standard user directory image scanner (sudo-aware)
+│   │   └── inspect.go         # Pure Go ISO9660 & UDF inspector & El Torito boot parser
+│   ├── safety/                # Preflight validation & system disk protection
+│   │   ├── capacity.go        # Payload vs target size calculation
+│   │   ├── identity.go        # Anti-race condition device identity revalidation
+│   │   ├── preflight.go       # Composite write plan validator
+│   │   └── system_disk.go     # System disk guard (root, /boot, /home, swap, C:)
+│   ├── engine/                # Native execution engine
+│   │   ├── planner.go         # Autonomous WritePlan generator
+│   │   ├── executor.go        # Step journal executor with cancellation & dry-run
+│   │   └── progress.go        # Live progress event dispatcher
+│   ├── writer/                # Low-level media writers & formatters
+│   │   ├── format.go          # Multi-OS filesystem formatter (exFAT, FAT32, NTFS, ext4, APFS)
+│   │   ├── raw.go             # 4 MiB chunk aligned streaming raw disk writer
+│   │   ├── unmount.go         # Cross-platform device & partition unmounting
+│   │   ├── verify.go          # Readback SHA-256 target verification engine
+│   │   └── windows_bypass.go  # Windows 11 autounattend.xml answer file generator
+│   └── ui/                    # User interface & terminal rendering
+│       ├── colors.go          # ANSI colors, step banners, and badges
+│       ├── help.go            # CLI documentation & version displays
+│       ├── menu.go            # Interactive prompts & selection menus
+│       └── progress.go        # Inline terminal progress bars & plan confirmation
+├── docs/                      # Architectural Decision Records (ADRs) and policies
+├── Makefile                   # Multiplatform build targets (Linux, macOS, Windows)
+├── LICENSE                    # MIT License
+└── README.md                  # Comprehensive user and architectural documentation
 ```
 
 ---

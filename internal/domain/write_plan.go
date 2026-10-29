@@ -3,10 +3,10 @@ package domain
 type CreationMode string
 
 const (
-	ModeRawWrite           CreationMode = "RawImageStream"
-	ModeDualPartitionUEFI  CreationMode = "DualPartitionUEFI"
-	ModeISOExtraction      CreationMode = "ISOExtraction"
-	ModeFormatOnly         CreationMode = "FormatOnly"
+	ModeRawWrite          CreationMode = "RawImageStream"
+	ModeDualPartitionUEFI CreationMode = "DualPartitionUEFI"
+	ModeISOExtraction     CreationMode = "ISOExtraction"
+	ModeFormatOnly        CreationMode = "FormatOnly"
 )
 
 type PartitionScheme string
