@@ -2,9 +2,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -15,237 +15,143 @@ import (
 )
 
 // Executor coordinates the end-to-end execution of a WritePlan.
+// The zero value plus a Provider is usable; NewExecutor offers functional options.
 type Executor struct {
 	Provider     device.DeviceProvider
 	TargetWriter io.Writer // Optional override for testing/fake storage
 	TargetReader io.Reader // Optional override for testing/fake storage
+
+	handlers map[domain.CreationMode]ModeHandler
 }
 
-// NewExecutor creates a new production Executor using the platform device provider.
-func NewExecutor() *Executor {
-	return &Executor{
-		Provider: device.DefaultProvider,
+// ExecutorOption configures an Executor (Functional Options pattern).
+type ExecutorOption func(*Executor)
+
+// WithProvider sets the device provider used for identity revalidation.
+func WithProvider(p device.DeviceProvider) ExecutorOption {
+	return func(e *Executor) { e.Provider = p }
+}
+
+// WithTargetIO overrides the destination writer/reader, e.g. for simulated storage.
+func WithTargetIO(w io.Writer, r io.Reader) ExecutorOption {
+	return func(e *Executor) { e.TargetWriter, e.TargetReader = w, r }
+}
+
+// WithModeHandler registers or replaces the handler for a creation mode.
+func WithModeHandler(mode domain.CreationMode, h ModeHandler) ExecutorOption {
+	return func(e *Executor) {
+		if e.handlers == nil {
+			e.handlers = defaultModeHandlers()
+		}
+		e.handlers[mode] = h
 	}
 }
 
+// NewExecutor creates a production Executor using the platform device provider.
+func NewExecutor(opts ...ExecutorOption) *Executor {
+	e := &Executor{Provider: device.DefaultProvider, handlers: defaultModeHandlers()}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+func (e *Executor) handlerFor(mode domain.CreationMode) (ModeHandler, error) {
+	handlers := e.handlers
+	if handlers == nil {
+		handlers = defaultModeHandlers()
+	}
+	h, ok := handlers[mode]
+	if !ok {
+		return nil, fmt.Errorf("unsupported creation mode %q: %w", mode, domain.ErrValidationFailed)
+	}
+	return h, nil
+}
+
 // Execute runs the plan to completion, updating progress and recording step journal entries.
+// The returned journal is non-nil whenever execution started, even on failure.
 func (e *Executor) Execute(ctx context.Context, plan *domain.WritePlan, onProgress ProgressReporter) (*domain.OperationJournal, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("plan cannot be nil: %w", domain.ErrValidationFailed)
 	}
 
-	journal := &domain.OperationJournal{
-		PlanID:    plan.ID,
-		StartedAt: time.Now(),
-	}
-
-	// 1. Preflight Validation
-	step0 := journal.AddEntry("Preflight safety validation")
-	if err := safety.ValidatePlan(ctx, plan); err != nil {
-		journal.CompleteEntry(step0, domain.StatusFailed, err.Error())
-		journal.EndedAt = time.Now()
-		journal.Err = err
-		return journal, err
-	}
-
-	// Revalidate device identity to prevent race condition swaps
-	if !plan.DryRun && e.Provider != nil {
-		currentDev, err := e.Provider.GetDevice(ctx, plan.Target.Path)
-		if err != nil {
-			journal.CompleteEntry(step0, domain.StatusFailed, fmt.Sprintf("device identity query failed: %v", err))
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-		if err := safety.RevalidateDevice(currentDev, plan.Target); err != nil {
-			journal.CompleteEntry(step0, domain.StatusFailed, fmt.Sprintf("device revalidation failed: %v", err))
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-	}
-	journal.CompleteEntry(step0, domain.StatusCompleted, "Preflight checks passed")
-
-	// 2. Handle Dry-Run Mode
-	if plan.DryRun {
-		for i, stepDesc := range plan.Steps {
-			if i == 0 {
-				continue // Already recorded
-			}
-			sIdx := journal.AddEntry(fmt.Sprintf("[DRY-RUN] %s", stepDesc))
-			// Simulate quick non-destructive delay
-			time.Sleep(10 * time.Millisecond)
-			if onProgress != nil {
-				onProgress(ProgressEvent{
-					StepIndex:      sIdx,
-					StepName:       stepDesc,
-					BytesProcessed: plan.EstimatedBytes,
-					TotalBytes:     plan.EstimatedBytes,
-					Percent:        100.0,
-				})
-			}
-			journal.CompleteEntry(sIdx, domain.StatusCompleted, "Dry-run simulated step completed safely without disk writes")
-		}
-		journal.EndedAt = time.Now()
-		return journal, nil
-	}
-
-	// 3. Unmount Target Volumes
-	step1 := journal.AddEntry("Unmount active target volumes")
-	if e.TargetWriter == nil {
-		if err := writer.UnmountDevice(ctx, plan.Target); err != nil {
-			journal.CompleteEntry(step1, domain.StatusFailed, err.Error())
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-	}
-	journal.CompleteEntry(step1, domain.StatusCompleted, "Device unmounted")
-
-	// 4. Execute Mode-Specific Workflows
-	switch plan.Mode {
-	case domain.ModeRawWrite:
-		if err := e.executeRawWrite(ctx, plan, journal, onProgress); err != nil {
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-
-	case domain.ModeFormatOnly:
-		if err := e.executeFormatOnly(ctx, plan, journal, onProgress); err != nil {
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-
-	case domain.ModeDualPartitionUEFI, domain.ModeISOExtraction:
-		if err := e.executeWindowsInstaller(ctx, plan, journal, onProgress); err != nil {
-			journal.EndedAt = time.Now()
-			journal.Err = err
-			return journal, err
-		}
-
-	default:
-		err := fmt.Errorf("unsupported creation mode: %s", plan.Mode)
-		journal.EndedAt = time.Now()
-		journal.Err = err
-		return journal, err
-	}
-
+	journal := &domain.OperationJournal{PlanID: plan.ID, StartedAt: time.Now()}
+	err := e.execute(ctx, &run{
+		plan:     plan,
+		journal:  journal,
+		progress: onProgress,
+		io:       deviceTargetIO{writer: e.TargetWriter, reader: e.TargetReader},
+	})
 	journal.EndedAt = time.Now()
+	if err != nil {
+		err = classifyCancellation(err)
+		journal.Err = err
+		return journal, err
+	}
 	return journal, nil
 }
 
-func (e *Executor) executeRawWrite(ctx context.Context, plan *domain.WritePlan, journal *domain.OperationJournal, onProgress ProgressReporter) error {
-	stepWrite := journal.AddEntry(fmt.Sprintf("Stream raw image to %s", plan.Target.Path))
+func (e *Executor) execute(ctx context.Context, r *run) error {
+	plan := r.plan
 
-	var dst io.Writer
-	var closer io.Closer
-
-	if e.TargetWriter != nil {
-		dst = e.TargetWriter
-	} else {
-		targetPath := plan.Target.RawPath
-		if targetPath == "" {
-			targetPath = plan.Target.Path
+	if err := r.step("Preflight safety validation", func(int) (string, error) {
+		if err := safety.ValidatePlan(ctx, plan); err != nil {
+			return "", err
 		}
-		file, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_SYNC, 0666)
-		if err != nil {
-			err = fmt.Errorf("failed to open target device for write: %w", err)
-			journal.CompleteEntry(stepWrite, domain.StatusFailed, err.Error())
-			return err
+		if err := e.revalidateIdentity(ctx, plan); err != nil {
+			return "", err
 		}
-		dst = file
-		closer = file
+		return "Preflight checks passed", nil
+	}); err != nil {
+		return err
 	}
 
-	err := writer.StreamRawImage(ctx, plan.Source.Path, dst, plan.Source.SizeBytes,
-		transferCallback(onProgress, stepWrite, "Streaming raw image"))
-
-	if closer != nil {
-		_ = closer.Close()
+	if plan.DryRun {
+		return r.dryRun(ctx)
 	}
 
+	handler, err := e.handlerFor(plan.Mode)
 	if err != nil {
-		journal.CompleteEntry(stepWrite, domain.StatusFailed, err.Error())
 		return err
 	}
-	journal.CompleteEntry(stepWrite, domain.StatusCompleted, "Image streamed and synchronized")
 
-	// Post-write verification
-	if plan.VerifyAfterWrite {
-		stepVerify := journal.AddEntry("Verify target SHA-256 digest")
-		var src io.Reader
-		var verifyCloser io.Closer
-
-		if e.TargetReader != nil {
-			src = e.TargetReader
-			if seeker, ok := src.(io.Seeker); ok {
-				_, _ = seeker.Seek(0, io.SeekStart)
+	// Substituted storage is not a real device and has nothing to unmount.
+	if e.TargetWriter == nil {
+		if err := r.step("Unmount active target volumes", func(int) (string, error) {
+			if err := writer.UnmountDevice(ctx, plan.Target); err != nil {
+				return "", err
 			}
-		} else {
-			targetPath := plan.Target.RawPath
-			if targetPath == "" {
-				targetPath = plan.Target.Path
-			}
-			file, err := os.Open(targetPath)
-			if err != nil {
-				err = fmt.Errorf("failed to open target for verification: %w", err)
-				journal.CompleteEntry(stepVerify, domain.StatusFailed, err.Error())
-				return err
-			}
-			src = file
-			verifyCloser = file
-		}
-
-		report, err := writer.VerifyTarget(ctx, src, plan.Source.SizeBytes, plan.Source.SHA256Checksum,
-			transferCallback(onProgress, stepVerify, "Verifying written data"))
-
-		if verifyCloser != nil {
-			_ = verifyCloser.Close()
-		}
-
-		if err != nil {
-			journal.CompleteEntry(stepVerify, domain.StatusFailed, err.Error())
+			return "Device unmounted", nil
+		}); err != nil {
 			return err
 		}
-		journal.CompleteEntry(stepVerify, domain.StatusCompleted, fmt.Sprintf("Verified (%s)", report.TargetDigest[:12]))
 	}
 
+	return handler.Execute(ctx, r)
+}
+
+// revalidateIdentity guards against device-swap races between planning and writing.
+func (e *Executor) revalidateIdentity(ctx context.Context, plan *domain.WritePlan) error {
+	if plan.DryRun || e.Provider == nil {
+		return nil
+	}
+	current, err := e.Provider.GetDevice(ctx, plan.Target.Path)
+	if err != nil {
+		return fmt.Errorf("device identity query failed: %w", err)
+	}
+	if err := safety.RevalidateDevice(current, plan.Target); err != nil {
+		return fmt.Errorf("device revalidation failed: %w", err)
+	}
 	return nil
 }
 
-func (e *Executor) executeFormatOnly(ctx context.Context, plan *domain.WritePlan, journal *domain.OperationJournal, onProgress ProgressReporter) error {
-	stepFmt := journal.AddEntry(fmt.Sprintf("Format %s as %s", plan.Target.Path, plan.Filesystem))
-	if err := writer.FormatPartition(ctx, plan.Target.Path, plan.Filesystem, plan.VolumeLabel); err != nil {
-		journal.CompleteEntry(stepFmt, domain.StatusFailed, err.Error())
-		return err
+// classifyCancellation marks context cancellation as domain.ErrCancelled while
+// preserving the original error for errors.Is checks.
+func classifyCancellation(err error) error {
+	if errors.Is(err, context.Canceled) && !errors.Is(err, domain.ErrCancelled) {
+		return fmt.Errorf("%w: %w", domain.ErrCancelled, err)
 	}
-	journal.CompleteEntry(stepFmt, domain.StatusCompleted, fmt.Sprintf("Formatted successfully as %s", plan.Filesystem))
-	return nil
-}
-
-func (e *Executor) executeWindowsInstaller(ctx context.Context, plan *domain.WritePlan, journal *domain.OperationJournal, onProgress ProgressReporter) error {
-	stepPart := journal.AddEntry("Prepare target partitions for Windows UEFI installer")
-	// For Windows, format and configure filesystem
-	if err := writer.FormatPartition(ctx, plan.Target.Path, plan.Filesystem, plan.VolumeLabel); err != nil {
-		journal.CompleteEntry(stepPart, domain.StatusFailed, err.Error())
-		return err
-	}
-	journal.CompleteEntry(stepPart, domain.StatusCompleted, "Target formatted for Windows installer")
-
-	if plan.BypassWindows11 {
-		stepBypass := journal.AddEntry("Inject autounattend.xml Windows 11 hardware bypasses")
-		xmlData := writer.GenerateAutoUnattendXML(writer.DefaultWindows11Bypass())
-		if len(xmlData) == 0 {
-			err := fmt.Errorf("failed to generate bypass xml")
-			journal.CompleteEntry(stepBypass, domain.StatusFailed, err.Error())
-			return err
-		}
-		journal.CompleteEntry(stepBypass, domain.StatusCompleted, "autounattend.xml injected (TPM, Secure Boot, RAM, CPU, Storage, NRO)")
-	}
-
-	return nil
+	return err
 }
 
 // FormatETA converts a duration into a human-readable mm:ss format.
