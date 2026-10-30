@@ -265,7 +265,7 @@ def get_terminal_content(frame):
     return lines
 
 def synthesize_audio():
-    print("Synthesizing audio sound effects & background ambience...")
+    print("Synthesizing authentic mechanical keyboard typing sound effects & background ambience...")
     total_samples = int(SAMPLE_RATE * TOTAL_SECONDS)
     left = [0.0] * total_samples
     right = [0.0] * total_samples
@@ -275,21 +275,60 @@ def synthesize_audio():
             left[idx] += val_l
             right[idx] += val_r
 
-    def add_keystroke(time_sec, is_enter=False):
+    def add_mech_keystroke(time_sec, char='a', is_enter=False):
+        is_space = (char == ' ')
         start_idx = int(time_sec * SAMPLE_RATE)
-        dur = 0.045 if is_enter else 0.025
+
+        if is_enter:
+            res_freq = 330.0
+            thump_freq = 145.0
+            dur = 0.075
+            vol = 0.95
+        elif is_space:
+            res_freq = 380.0
+            thump_freq = 175.0
+            dur = 0.065
+            vol = 0.90
+        else:
+            res_freq = random.uniform(560.0, 780.0)
+            thump_freq = random.uniform(220.0, 290.0)
+            dur = 0.050
+            vol = random.uniform(0.82, 0.94)
+
+        pan = 0.5 + random.uniform(-0.15, 0.15)
         num_s = int(dur * SAMPLE_RATE)
-        base_freq = 420.0 if is_enter else 1350.0 + random.uniform(-100, 100)
-        decay = 70.0 if is_enter else 140.0
-        vol = 0.35 if is_enter else 0.22
-        pan = 0.45 + random.uniform(-0.1, 0.1)
+
+        # 1. Downstroke: Crisp click leaf + PBT keycap hollow body + Case plate thump
         for i in range(num_s):
             t = i / SAMPLE_RATE
-            env = math.exp(-decay * t)
-            noise = (random.random() * 2.0 - 1.0) * math.exp(-250.0 * t) * 0.4
-            tone = math.sin(2.0 * math.pi * base_freq * t) * 0.4 + math.sin(2.0 * math.pi * base_freq * 2.1 * t) * 0.2
-            s = (noise + tone) * env * vol
+            click = (random.random() * 2.0 - 1.0) * math.exp(-380.0 * t) * 0.75
+            body = (
+                math.sin(2 * math.pi * res_freq * t) +
+                0.55 * math.sin(2 * math.pi * res_freq * 1.85 * t) +
+                0.25 * math.sin(2 * math.pi * res_freq * 2.8 * t)
+            ) * math.exp(-110.0 * t) * 0.55
+            thump = (
+                math.sin(2 * math.pi * thump_freq * t) +
+                0.4 * math.sin(2 * math.pi * thump_freq * 0.5 * t)
+            ) * math.exp(-65.0 * t) * 0.50
+            stab = 0.0
+            if is_space or is_enter:
+                stab = math.sin(2 * math.pi * 1850.0 * t) * math.exp(-250.0 * t) * 0.20
+
+            s = (click + body + thump + stab) * vol
             add_sample(start_idx + i, s * (1.0 - pan), s * pan)
+
+        # 2. Upstroke Release: Plastic slider bouncing against switch top housing
+        up_offset = int((0.026 + random.uniform(0.008, 0.020)) * SAMPLE_RATE)
+        up_idx = start_idx + up_offset
+        up_dur = int(0.025 * SAMPLE_RATE)
+        up_freq = res_freq * 1.5 + random.uniform(-40, 40)
+        for i in range(up_dur):
+            t = i / SAMPLE_RATE
+            up_snap = (random.random() * 2.0 - 1.0) * math.exp(-420.0 * t) * 0.40
+            up_tone = math.sin(2 * math.pi * up_freq * t) * math.exp(-220.0 * t) * 0.28
+            s_up = (up_snap + up_tone) * vol * 0.45
+            add_sample(up_idx + i, s_up * (1.0 - pan), s_up * pan)
 
     def add_ding(time_sec, freq=1046.5, volume=0.28, duration=0.6):
         start_idx = int(time_sec * SAMPLE_RATE)
@@ -327,10 +366,10 @@ def synthesize_audio():
             pct = t / dur
             freq = 130.0 + 80.0 * pct
             pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * 12.0 * t)
-            s = math.sin(2.0 * math.pi * freq * t) * pulse * 0.045 + math.sin(2.0 * math.pi * freq * 2.0 * t) * 0.02
+            s = math.sin(2.0 * math.pi * freq * t) * pulse * 0.035 + math.sin(2.0 * math.pi * freq * 2.0 * t) * 0.015
             add_sample(start_idx + i, s * 0.55, s * 0.45)
 
-    # Ambient Background
+    # Ambient Background (Subtle background atmosphere)
     chords = [
         [146.83, 174.61, 220.00, 261.63],
         [196.00, 246.94, 293.66],
@@ -344,51 +383,61 @@ def synthesize_audio():
         chord_t = t % chord_len
         current_chord = chords[chord_idx]
         pad_env = math.sin(math.pi * (chord_t / chord_len)) ** 1.5
-        pad = sum(math.sin(2.0 * math.pi * f * t) for f in current_chord) * (0.018 / len(current_chord)) * pad_env
+        pad = sum(math.sin(2.0 * math.pi * f * t) for f in current_chord) * (0.008 / len(current_chord)) * pad_env
         beat_phase = (t % 0.667) / 0.667
         bass_env = math.exp(-8.0 * beat_phase)
         bass_freq = current_chord[0] * 0.5
-        bass = math.sin(2.0 * math.pi * bass_freq * t) * bass_env * 0.035
+        bass = math.sin(2.0 * math.pi * bass_freq * t) * bass_env * 0.020
         add_sample(i, (pad + bass) * 0.5, (pad + bass) * 0.5)
 
-    # Command 1
-    for k in range(len("ventox list")):
-        add_keystroke((45 + k * (40 / 11)) / FPS)
-    add_keystroke(85 / FPS, is_enter=True)
+    # Command 1: ventox list
+    cmd1 = "ventox list"
+    for idx, ch in enumerate(cmd1):
+        t = (45 + idx * (40 / len(cmd1))) / FPS
+        add_mech_keystroke(t, char=ch)
+    add_mech_keystroke(85 / FPS, is_enter=True)
     add_ding(105 / FPS, freq=880.0, volume=0.22)
     add_ding(115 / FPS, freq=1046.5, volume=0.24)
 
-    # Command 2
-    for k in range(len("ventox --dry-run --iso win11.iso --device /dev/sdb")):
-        add_keystroke((165 + k * (45 / 50)) / FPS)
-    add_keystroke(210 / FPS, is_enter=True)
+    # Command 2: ventox --dry-run --iso win11.iso --device /dev/sdb
+    cmd2 = "ventox --dry-run --iso win11.iso --device /dev/sdb"
+    for idx, ch in enumerate(cmd2):
+        t = (165 + idx * (45 / len(cmd2))) / FPS
+        add_mech_keystroke(t, char=ch)
+    add_mech_keystroke(210 / FPS, is_enter=True)
     add_ding(235 / FPS, freq=880.0, volume=0.22)
     add_ding(250 / FPS, freq=1046.5, volume=0.22)
     add_ding(265 / FPS, freq=1318.5, volume=0.28)
 
-    # Command 3
-    for k in range(len("sudo ventox --iso win11.iso --device /dev/sdb --verify")):
-        add_keystroke((315 + k * (50 / 53)) / FPS)
-    add_keystroke(365 / FPS, is_enter=True)
+    # Command 3: sudo ventox --iso win11.iso --device /dev/sdb --verify
+    cmd3 = "sudo ventox --iso win11.iso --device /dev/sdb --verify"
+    for idx, ch in enumerate(cmd3):
+        t = (315 + idx * (50 / len(cmd3))) / FPS
+        add_mech_keystroke(t, char=ch)
+    add_mech_keystroke(365 / FPS, is_enter=True)
     add_ding(390 / FPS, freq=880.0, volume=0.22)
     add_ding(405 / FPS, freq=1046.5, volume=0.24)
     for b_idx in range(4):
         add_ding((425 / FPS) + b_idx * 0.08, freq=1200.0 + b_idx * 150.0, volume=0.18, duration=0.2)
     add_data_stream_hum(440 / FPS, 660 / FPS)
-    add_keystroke(675 / FPS, is_enter=True)
+    add_mech_keystroke(675 / FPS, is_enter=True)
     add_ding(695 / FPS, freq=1046.5, volume=0.30)
     add_celebration_chord(705 / FPS, volume=0.45)
 
-    # Command 4
-    for k in range(len("sudo ventox format --device /dev/sdb --fs exfat --label \"MY_USB\"")):
-        add_keystroke((775 + k * (60 / 64)) / FPS)
-    add_keystroke(835 / FPS, is_enter=True)
+    # Command 4: sudo ventox format --device /dev/sdb --fs exfat --label "MY_USB"
+    cmd4 = 'sudo ventox format --device /dev/sdb --fs exfat --label "MY_USB"'
+    for idx, ch in enumerate(cmd4):
+        t = (775 + idx * (60 / len(cmd4))) / FPS
+        add_mech_keystroke(t, char=ch)
+    add_mech_keystroke(835 / FPS, is_enter=True)
     add_ding(885 / FPS, freq=1174.66, volume=0.28)
 
-    # Command 5
-    for k in range(len("ventox version")):
-        add_keystroke((955 + k * (30 / 14)) / FPS)
-    add_keystroke(985 / FPS, is_enter=True)
+    # Command 5: ventox version
+    cmd5 = "ventox version"
+    for idx, ch in enumerate(cmd5):
+        t = (955 + idx * (30 / len(cmd5))) / FPS
+        add_mech_keystroke(t, char=ch)
+    add_mech_keystroke(985 / FPS, is_enter=True)
     add_celebration_chord(995 / FPS, volume=0.40)
 
     # Write WAV
