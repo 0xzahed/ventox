@@ -2,432 +2,130 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/0xzahed/ventox/internal/device"
-	"github.com/0xzahed/ventox/internal/domain"
-	"github.com/0xzahed/ventox/internal/engine"
-	"github.com/0xzahed/ventox/internal/iso"
+	"github.com/0xzahed/ventox/internal/app"
 	"github.com/0xzahed/ventox/internal/ui"
 )
 
-type cliConfig struct {
-	command     string
-	dryRun      bool
-	verify      bool
-	bypassWin11 bool
-	devicePath  string
-	isoPath     string
-	fs          string
-	label       string
-	autoConfirm bool
-	jsonOutput  bool
-}
-
 func main() {
-	// Fast path for help and version without root check
-	for _, a := range os.Args[1:] {
-		if a == "-h" || a == "--help" || a == "help" {
+	os.Exit(run(os.Args[1:]))
+}
+
+// run is the testable entry point; it is the only place errors become exit codes.
+func run(args []string) int {
+	for _, a := range args {
+		switch a {
+		case "-h", "--help", "help":
 			ui.PrintHelp()
-			return
-		}
-		if a == "-v" || a == "--version" || a == "version" {
+			return 0
+		case "-v", "--version", "version":
 			ui.PrintVersion()
-			return
+			return 0
 		}
 	}
 
-	cfg := parseFlags()
+	cfg, err := parseFlags(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		return 0
+	case err != nil:
+		ui.PrintError(fmt.Sprintf("Invalid arguments: %v", err))
+		return 2
+	}
 
-	switch cfg.command {
-	case "list", "ls":
-		runList(cfg)
-		return
-	case "format", "wipe":
-		runFormat(cfg)
-		return
+	application := app.New(app.Deps{})
+	if _, err := application.Lookup(cfg.Command); err != nil {
+		ui.PrintError(err.Error())
+		ui.PrintHelp()
+		return 2
+	}
+
+	if app.RequiresRoot(cfg.Command) {
+		if code, reexeced, err := ensureRoot(cfg.DryRun, args); err != nil {
+			ui.PrintError(fmt.Sprintf("Failed to acquire administrative privileges: %v", err))
+			return 1
+		} else if reexeced {
+			return code
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch err := application.Run(ctx, cfg); {
+	case err == nil:
+		return 0
+	case errors.Is(err, app.ErrCancelled):
+		ui.PrintWarning("Operation cancelled by user. No changes were made.")
+		return 0
 	default:
-		runBootCreator(cfg)
+		ui.PrintError(err.Error())
+		return 1
 	}
 }
 
-func parseFlags() cliConfig {
+func parseFlags(args []string) (app.Config, error) {
 	fs := flag.NewFlagSet("ventox", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.Usage = ui.PrintHelp
 
-	dryRun := fs.Bool("dry-run", false, "Simulate operation without writing")
-	verify := fs.Bool("verify", false, "Verify target data checksum after writing")
-	bypassWin11 := fs.Bool("bypass-win11", true, "Enable Windows 11 hardware bypasses")
-	devicePath := fs.String("device", "", "Target USB device path")
-	isoPath := fs.String("iso", "", "Source disk image / ISO path")
-	targetFS := fs.String("fs", "", "Target filesystem (exfat, fat32, ntfs, ext4, apfs)")
-	label := fs.String("label", "", "Filesystem volume label")
-	autoConfirm := fs.Bool("yes", false, "Skip confirmation prompts")
-	fs.BoolVar(autoConfirm, "y", false, "Skip confirmation prompts")
-	jsonOutput := fs.Bool("json", false, "Structured JSON output")
+	var cfg app.Config
+	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Simulate operation without writing")
+	fs.BoolVar(&cfg.Verify, "verify", false, "Verify target data checksum after writing")
+	fs.BoolVar(&cfg.BypassWin11, "bypass-win11", true, "Enable Windows 11 hardware bypasses")
+	fs.StringVar(&cfg.DevicePath, "device", "", "Target USB device path")
+	fs.StringVar(&cfg.ISOPath, "iso", "", "Source disk image / ISO path")
+	fs.StringVar(&cfg.FS, "fs", "", "Target filesystem (exfat, fat32, ntfs, ext4, apfs)")
+	fs.StringVar(&cfg.Label, "label", "", "Filesystem volume label")
+	fs.BoolVar(&cfg.AutoConfirm, "yes", false, "Skip confirmation prompts")
+	fs.BoolVar(&cfg.AutoConfirm, "y", false, "Skip confirmation prompts")
+	fs.BoolVar(&cfg.JSONOutput, "json", false, "Structured JSON output")
 
-	// Check first argument for subcommand
-	var command string
-	args := os.Args[1:]
+	// The first non-flag argument is the subcommand.
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		command = strings.ToLower(args[0])
+		cfg.Command = strings.ToLower(args[0])
 		args = args[1:]
 	}
-
-	if err := fs.Parse(args); err == flag.ErrHelp {
-		os.Exit(0)
+	if err := fs.Parse(args); err != nil {
+		return app.Config{}, err
 	}
-
-	return cliConfig{
-		command:     command,
-		dryRun:      *dryRun,
-		verify:      *verify,
-		bypassWin11: *bypassWin11,
-		devicePath:  *devicePath,
-		isoPath:     *isoPath,
-		fs:          *targetFS,
-		label:       *label,
-		autoConfirm: *autoConfirm,
-		jsonOutput:  *jsonOutput,
-	}
+	return cfg, nil
 }
 
-func ensureRoot(dryRun bool) {
-	if dryRun || runtime.GOOS == "windows" {
-		return
-	}
-	if os.Geteuid() != 0 {
-		ui.Banner()
-		ui.PrintInfo("Administrative privileges (sudo) required for direct block device access.")
-		ui.PrintInfo("Re-executing with sudo...")
-		fmt.Println()
-
-		exe, err := os.Executable()
-		if err != nil {
-			exe = os.Args[0]
-		}
-
-		cmd := exec.Command("sudo", append([]string{exe}, os.Args[1:]...)...)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-}
-
-func runList(cfg cliConfig) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	devices, err := device.DefaultProvider.ListDevices(ctx)
-	if err != nil && !cfg.jsonOutput {
-		ui.PrintWarning(fmt.Sprintf("Device scan returned warning: %v", err))
-	}
-
-	images, err := iso.DiscoverImages(ctx)
-	if err != nil && !cfg.jsonOutput {
-		ui.PrintWarning(fmt.Sprintf("Image discovery warning: %v", err))
-	}
-
-	if cfg.jsonOutput {
-		out := map[string]interface{}{
-			"devices": devices,
-			"images":  images,
-		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(out)
-		return
+// ensureRoot re-executes the binary under sudo when not privileged. It reports
+// whether a re-exec happened together with the child's exit code.
+func ensureRoot(dryRun bool, args []string) (code int, reexeced bool, err error) {
+	if dryRun || runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return 0, false, nil
 	}
 
 	ui.Banner()
-	fmt.Println(ui.Cyan(ui.Bold("--- CONNECTED USB STORAGE DEVICES ---")))
-	var usbCount int
-	for _, d := range devices {
-		if d.IsRemovable || d.BusType == "USB" {
-			usbCount++
-			fmt.Printf("  %s %s\n", ui.Cyan(fmt.Sprintf("[%d]", usbCount)), d.DisplayString())
-		}
-	}
-	if usbCount == 0 {
-		ui.PrintWarning("No USB storage drives currently connected.")
-	}
-
+	ui.PrintInfo("Administrative privileges (sudo) required for direct block device access.")
+	ui.PrintInfo("Re-executing with sudo...")
 	fmt.Println()
-	fmt.Println(ui.Cyan(ui.Bold("--- DETECTED ISO DISK IMAGES ---")))
-	if len(images) == 0 {
-		ui.PrintWarning("No .iso or .img files found in user Downloads or Desktop.")
-	} else {
-		for i, img := range images {
-			fmt.Printf("  %s %s %s\n     %s\n",
-				ui.Cyan(fmt.Sprintf("[%d]", i+1)),
-				ui.Bold(img.Name),
-				ui.Cyan(fmt.Sprintf("(%s)", img.FormattedSize())),
-				ui.Gray(img.Path),
-			)
-		}
-	}
-	fmt.Println()
-}
 
-func runFormat(cfg cliConfig) {
-	ensureRoot(cfg.dryRun)
-
-	ctx := context.Background()
-
-	// 1. Select Device
-	var targetDev domain.BlockDevice
-	if cfg.devicePath != "" {
-		dev, err := device.DefaultProvider.GetDevice(ctx, cfg.devicePath)
-		if err != nil {
-			// Construct direct block device info
-			targetDev = domain.BlockDevice{Path: cfg.devicePath, RawPath: cfg.devicePath}
-		} else {
-			targetDev = dev
-		}
-	} else {
-		ui.Banner()
-		ui.PrintStep(1, 3, "Select USB Drive to Format")
-		devs, _ := device.DefaultProvider.ListDevices(ctx)
-		var usbList []domain.BlockDevice
-		for _, d := range devs {
-			if d.IsRemovable || d.BusType == "USB" {
-				usbList = append(usbList, d)
-			}
-		}
-		selected, err := ui.SelectDevice(usbList)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("Device selection failed: %v", err))
-			os.Exit(1)
-		}
-		targetDev = selected
-	}
-
-	// 2. Select Filesystem
-	targetFS := domain.TargetFilesystem(cfg.fs)
-	if targetFS == "" {
-		ui.PrintStep(2, 3, "Select Target Filesystem")
-		fmt.Println("Available filesystems: exFAT (Recommended), FAT32, NTFS, ext4")
-		fsChoice, _ := ui.Prompt("Enter filesystem [exfat/fat32/ntfs/ext4]", "exfat")
-		switch strings.ToLower(strings.TrimSpace(fsChoice)) {
-		case "fat32":
-			targetFS = domain.FSFAT32
-		case "ntfs":
-			targetFS = domain.FSNTFS
-		case "ext4":
-			targetFS = domain.FSEXT4
-		default:
-			targetFS = domain.FSExFAT
-		}
-	}
-
-	label := cfg.label
-	if label == "" {
-		lbl, _ := ui.Prompt("Enter Volume Label", "VENTOX")
-		label = lbl
-	}
-
-	// 3. Create Plan
-	plan, err := engine.CreatePlan(engine.PlanOptions{
-		Target:          targetDev,
-		Source:          nil,
-		RequestedFS:     targetFS,
-		RequestedScheme: domain.SchemeGPT,
-		VolumeLabel:     label,
-		DryRun:          cfg.dryRun,
-	})
+	exe, err := os.Executable()
 	if err != nil {
-		ui.PrintError(fmt.Sprintf("Failed to generate format plan: %v", err))
-		os.Exit(1)
+		exe = os.Args[0]
 	}
-
-	// 4. Confirm
-	if !cfg.autoConfirm && !ui.ConfirmPlan(plan) {
-		ui.PrintWarning("Operation cancelled by user.")
-		return
-	}
-
-	// 5. Execute
-	ui.PrintInfo(fmt.Sprintf("Executing format plan (%s as %s)...", targetDev.Path, targetFS))
-	execContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		cancel()
-	}()
-
-	executor := engine.NewExecutor()
-	journal, err := executor.Execute(execContext, plan, func(p engine.ProgressEvent) {
-		ui.RenderProgressBar(p.BytesProcessed, p.TotalBytes, p.Percent, p.SpeedBytesSec, p.ETA, p.StepName)
-	})
-	ui.ClearProgressBar()
-
-	if err != nil {
-		ui.PrintError(fmt.Sprintf("Format failed: %v", err))
-		os.Exit(1)
-	}
-
-	if cfg.jsonOutput {
-		_ = json.NewEncoder(os.Stdout).Encode(journal)
-		return
-	}
-
-	ui.PrintSuccess(fmt.Sprintf("Drive %s successfully formatted as %s (Label: %s)", targetDev.Path, targetFS, label))
-}
-
-func runBootCreator(cfg cliConfig) {
-	ensureRoot(cfg.dryRun)
-
-	ctx := context.Background()
-
-	// 1. Select Target USB Device
-	var targetDev domain.BlockDevice
-	if cfg.devicePath != "" {
-		dev, err := device.DefaultProvider.GetDevice(ctx, cfg.devicePath)
-		if err != nil {
-			targetDev = domain.BlockDevice{
-				Path:        cfg.devicePath,
-				RawPath:     device.DefaultProvider.GetRawPath(cfg.devicePath),
-				IsRemovable: true,
-			}
-		} else {
-			targetDev = dev
+	cmd := exec.Command("sudo", append([]string{exe}, args...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode(), true, nil
 		}
-	} else {
-		ui.Banner()
-		ui.PrintStep(1, 4, "Detecting USB Drives")
-		devs, _ := device.DefaultProvider.ListDevices(ctx)
-		var usbList []domain.BlockDevice
-		for _, d := range devs {
-			if d.IsRemovable || d.BusType == "USB" {
-				usbList = append(usbList, d)
-			}
-		}
-		selected, err := ui.SelectDevice(usbList)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("USB selection error: %v", err))
-			os.Exit(1)
-		}
-		targetDev = selected
+		return 0, true, fmt.Errorf("failed to run sudo: %w", err)
 	}
-	if !cfg.jsonOutput {
-		ui.PrintSuccess(fmt.Sprintf("Target USB Selected: %s", targetDev.DisplayString()))
-	}
-
-	// 2. Select Source ISO Image
-	var sourceMeta domain.ImageMetadata
-	if cfg.isoPath != "" {
-		meta, err := iso.InspectImage(cfg.isoPath)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("Failed to inspect ISO: %v", err))
-			os.Exit(1)
-		}
-		sourceMeta = meta
-	} else {
-		ui.PrintStep(2, 4, "Scanning for ISO Files")
-		images, _ := iso.DiscoverImages(ctx)
-		selectedPath, err := ui.SelectImage(images)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("Image selection error: %v", err))
-			os.Exit(1)
-		}
-		meta, err := iso.InspectImage(selectedPath)
-		if err != nil {
-			ui.PrintError(fmt.Sprintf("Failed to inspect selected ISO: %v", err))
-			os.Exit(1)
-		}
-		sourceMeta = meta
-	}
-	if !cfg.jsonOutput {
-		ui.PrintSuccess(fmt.Sprintf("Image Loaded: %s (%s, %s)", sourceMeta.Name, sourceMeta.FormattedSize(), sourceMeta.Classification))
-	}
-
-	// 3. Create Architecture Plan
-	plan, err := engine.CreatePlan(engine.PlanOptions{
-		Target:           targetDev,
-		Source:           &sourceMeta,
-		BypassWindows11:  cfg.bypassWin11,
-		VerifyAfterWrite: cfg.verify,
-		DryRun:           cfg.dryRun,
-	})
-	if err != nil {
-		ui.PrintError(fmt.Sprintf("Failed to create operation plan: %v", err))
-		os.Exit(1)
-	}
-
-	// 4. Confirmation Dialog
-	if !cfg.autoConfirm && !ui.ConfirmPlan(plan) {
-		ui.PrintWarning("Operation cancelled by user. No changes were made.")
-		return
-	}
-
-	// 5. Execute Plan
-	if !cfg.jsonOutput {
-		ui.PrintStep(3, 3, fmt.Sprintf("Executing Native Engine (%s)", plan.Mode))
-	}
-
-	execContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println()
-		ui.PrintWarning("Interrupt received! Cancelling active disk operation...")
-		cancel()
-	}()
-
-	executor := engine.NewExecutor()
-	journal, err := executor.Execute(execContext, plan, func(p engine.ProgressEvent) {
-		if !cfg.jsonOutput {
-			ui.RenderProgressBar(p.BytesProcessed, p.TotalBytes, p.Percent, p.SpeedBytesSec, p.ETA, p.StepName)
-		}
-	})
-	if !cfg.jsonOutput {
-		ui.ClearProgressBar()
-	}
-
-	if err != nil {
-		ui.PrintError(fmt.Sprintf("Deployment failed: %v", err))
-		os.Exit(1)
-	}
-
-	if cfg.jsonOutput {
-		_ = json.NewEncoder(os.Stdout).Encode(journal)
-		return
-	}
-
-	// Complete Banner
-	fmt.Println()
-	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
-	fmt.Println(ui.Green(ui.Bold("  🎉 CONGRATULATIONS! BOOTABLE USB IS READY! 🎉               ")))
-	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
-	fmt.Printf(" • Target USB:   %s\n", ui.Bold(targetDev.Path))
-	fmt.Printf(" • Boot Engine:  Ventox Native (%s)\n", plan.Mode)
-	fmt.Printf(" • Loaded Image: %s (%s)\n", ui.Bold(sourceMeta.Name), sourceMeta.FormattedSize())
-	if plan.BypassWindows11 {
-		fmt.Printf(" • Bypasses:     TPM 2.0, Secure Boot, RAM, CPU, Storage, NRO\n")
-	}
-	if plan.VerifyAfterWrite {
-		fmt.Printf(" • Verification: SHA-256 Verified\n")
-	}
-	fmt.Println(" • Ready to boot on any modern PC (Press F12, F11, or Esc at boot)")
-	fmt.Println(ui.Green(ui.Bold("═══════════════════════════════════════════════════════════════")))
-	fmt.Println()
+	return 0, true, nil
 }
