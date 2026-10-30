@@ -159,23 +159,8 @@ func (e *Executor) executeRawWrite(ctx context.Context, plan *domain.WritePlan, 
 		closer = file
 	}
 
-	err := writer.StreamRawImage(ctx, plan.Source.Path, dst, plan.Source.SizeBytes, func(bytesWritten, totalBytes int64, speed float64, eta time.Duration) {
-		if onProgress != nil {
-			pct := float64(0)
-			if totalBytes > 0 {
-				pct = (float64(bytesWritten) / float64(totalBytes)) * 100.0
-			}
-			onProgress(ProgressEvent{
-				StepIndex:      stepWrite,
-				StepName:       "Streaming raw image",
-				BytesProcessed: bytesWritten,
-				TotalBytes:     totalBytes,
-				Percent:        pct,
-				SpeedBytesSec:  speed,
-				ETA:            eta,
-			})
-		}
-	})
+	err := writer.StreamRawImage(ctx, plan.Source.Path, dst, plan.Source.SizeBytes,
+		transferCallback(onProgress, stepWrite, "Streaming raw image"))
 
 	if closer != nil {
 		_ = closer.Close()
@@ -213,23 +198,8 @@ func (e *Executor) executeRawWrite(ctx context.Context, plan *domain.WritePlan, 
 			verifyCloser = file
 		}
 
-		report, err := writer.VerifyTarget(ctx, src, plan.Source.SizeBytes, plan.Source.SHA256Checksum, func(bytesChecked, totalBytes int64, speed float64, eta time.Duration) {
-			if onProgress != nil {
-				pct := float64(0)
-				if totalBytes > 0 {
-					pct = (float64(bytesChecked) / float64(totalBytes)) * 100.0
-				}
-				onProgress(ProgressEvent{
-					StepIndex:      stepVerify,
-					StepName:       "Verifying written data",
-					BytesProcessed: bytesChecked,
-					TotalBytes:     totalBytes,
-					Percent:        pct,
-					SpeedBytesSec:  speed,
-					ETA:            eta,
-				})
-			}
-		})
+		report, err := writer.VerifyTarget(ctx, src, plan.Source.SizeBytes, plan.Source.SHA256Checksum,
+			transferCallback(onProgress, stepVerify, "Verifying written data"))
 
 		if verifyCloser != nil {
 			_ = verifyCloser.Close()
