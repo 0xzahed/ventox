@@ -2,6 +2,7 @@ package safety
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/0xzahed/ventox/internal/domain"
@@ -120,5 +121,26 @@ func TestValidatePlan(t *testing.T) {
 	err := ValidatePlan(ctx, plan)
 	if err == nil {
 		t.Fatalf("Expected plan validation to fail for system disk target")
+	}
+}
+
+func TestChainStopsAtFirstFailure(t *testing.T) {
+	boom := errors.New("boom")
+	ran := false
+	chain := Chain{
+		ValidatorFunc(func(context.Context, *domain.WritePlan) error { return boom }),
+		ValidatorFunc(func(context.Context, *domain.WritePlan) error { ran = true; return nil }),
+	}
+	if err := chain.Validate(context.Background(), &domain.WritePlan{}); !errors.Is(err, boom) {
+		t.Errorf("want boom, got %v", err)
+	}
+	if ran {
+		t.Errorf("chain continued after failure")
+	}
+}
+
+func TestValidatePlanNil(t *testing.T) {
+	if err := ValidatePlan(context.Background(), nil); !errors.Is(err, domain.ErrValidationFailed) {
+		t.Errorf("want ErrValidationFailed, got %v", err)
 	}
 }
