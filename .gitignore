@@ -32,3 +32,5 @@ go.work.sum
 # Local media renders
 *.mp4
 *.gif
+!docs/assets/*.mp4
+!docs/assets/*.gif
